@@ -1,13 +1,6 @@
-"""
-todo:
-1) Make is so that dash.get_page_container() doesn't need to be a function - should be just `dash.page_container`
-
-2) Make  `dash.register_page` rather than `app.register_page`
-
-"""
-
 import os
 from os import listdir
+import collections
 from os.path import isfile, join
 from urllib.parse import parse_qs
 from keyword import iskeyword
@@ -21,10 +14,15 @@ def warning_message(message, category, filename, lineno, line=None):
 warnings.formatwarning = warning_message
 
 PAGE_CONTAINER = ""
+PAGE_REGISTRY = collections.OrderedDict()
 
 
 def get_page_container():
     return PAGE_CONTAINER
+
+
+def get_page_registry():
+    return PAGE_REGISTRY
 
 
 def _infer_image(module):
@@ -131,3 +129,107 @@ def _parse_path_variables(pathname, path_template):
         elif template_segment != path_segment:
             return None
     return path_vars
+
+
+def register_page(
+    module,
+    path=None,
+    path_template=None,
+    name=None,
+    order=None,
+    title=None,
+    description=None,
+    image=None,
+    redirect_from=None,
+    layout=None,
+    **kwargs,
+):
+    """ """
+    return app_register_page(
+        PAGE_REGISTRY,
+        module,
+        path,
+        path_template,
+        name,
+        order,
+        title,
+        description,
+        image,
+        redirect_from,
+        layout,
+        **kwargs,
+    )
+
+
+def app_register_page(
+    page_registry,
+    module,
+    path=None,
+    path_template=None,
+    name=None,
+    order=None,
+    title=None,
+    description=None,
+    image=None,
+    redirect_from=None,
+    layout=None,
+    **kwargs,
+):
+    # COERCE
+    # - Set the order
+    # - Inferred paths
+    page = dict(
+        module=module,
+        supplied_path=path,
+        path_template=None
+        if path_template is None
+        else _validate_template(path_template),
+        path=(path if path is not None else _infer_path(module, path_template)),
+        supplied_name=name,
+        name=(name if name is not None else _filename_to_name(module)),
+    )
+    page.update(
+        supplied_title=title,
+        title=(title if title is not None else page["name"]),
+    )
+    page.update(
+        description=description if description else "",
+        order=order,
+        supplied_order=order,
+        supplied_layout=layout,
+        **kwargs,
+    )
+    page.update(
+        image=(image if image is not None else _infer_image(module)),
+        supplied_image=image,
+    )
+    page.update(redirect_from=redirect_from)
+
+    page_registry[module] = page
+
+    if layout is not None:
+        # Override the layout found in the file set during `plug`
+        page_registry[module]["layout"] = layout
+
+    # set home page order
+    order_supplied = any(
+        p["supplied_order"] is not None for p in page_registry.values()
+    )
+
+    for p in page_registry.values():
+        p["order"] = (
+            0 if p["path"] == "/" and not order_supplied else p["supplied_order"]
+        )
+
+    # sorted by order then by module name
+    page_registry_list = sorted(
+        page_registry.values(),
+        key=lambda i: (str(i.get("order", i["module"])), i["module"]),
+    )
+
+    page_registry = collections.OrderedDict(
+        [(p["module"], p) for p in page_registry_list]
+    )
+
+    global PAGE_REGISTRY
+    PAGE_REGISTRY = page_registry

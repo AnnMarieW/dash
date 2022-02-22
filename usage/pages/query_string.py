@@ -1,6 +1,6 @@
 import dash
 
-# dash.register_page(__name__, path="/dashboard")
+dash.register_page(__name__, path="/dashboard")
 
 
 def layout(velocity=None, **other_unknown_query_strings):

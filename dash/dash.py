@@ -65,10 +65,6 @@ import warnings
 from textwrap import dedent
 from . import _pages
 from ._pages import (
-    _infer_image,
-    _filename_to_name,
-    _validate_template,
-    _infer_path,
     _parse_path_variables,
     _parse_query_string,
 )
@@ -1412,6 +1408,9 @@ class Dash:
         self._callback_list.extend(_callback.GLOBAL_CALLBACK_LIST)
         _callback.GLOBAL_CALLBACK_LIST.clear()
 
+        # amw  Update page_registry  assigned with dash.register_page
+        self.page_registry = _pages.PAGE_REGISTRY.copy()
+
     def _add_assets_resource(self, url_path, file_path):
         res = {"asset_path": url_path, "filepath": file_path}
         if self.config.assets_external_path:
@@ -2076,9 +2075,9 @@ class Dash:
 
     # amw
 
-    def register_page(
+    def _register_page(
         self,
-        module,
+        module=None,
         path=None,
         path_template=None,
         name=None,
@@ -2090,61 +2089,19 @@ class Dash:
         layout=None,
         **kwargs,
     ):
-        """ """
-        # COERCE
-        # - Set the order
-        # - Inferred paths
-        page = dict(
-            module=module,
-            supplied_path=path,
-            path_template=None
-            if path_template is None
-            else _validate_template(path_template),
-            path=(path if path is not None else _infer_path(module, path_template)),
-            supplied_name=name,
-            name=(name if name is not None else _filename_to_name(module)),
-        )
-        page.update(
-            supplied_title=title,
-            title=(title if title is not None else page["name"]),
-        )
-        page.update(
-            description=description if description else "",
-            order=order,
-            supplied_order=order,
-            supplied_layout=layout,
+        return _pages.app_register_page(
+            self.page_registry,
+            module,
+            path,
+            path_template,
+            name,
+            order,
+            title,
+            description,
+            image,
+            redirect_from,
+            layout,
             **kwargs,
-        )
-        page.update(
-            image=(image if image is not None else _infer_image(module)),
-            supplied_image=image,
-        )
-        page.update(redirect_from=redirect_from)
-
-        self.page_registry[module] = page
-
-        if layout is not None:
-            # Override the layout found in the file set during `plug`
-            self.page_registry[module]["layout"] = layout
-
-        # set home page order
-        order_supplied = any(
-            p["supplied_order"] is not None for p in self.page_registry.values()
-        )
-
-        for p in self.page_registry.values():
-            p["order"] = (
-                0 if p["path"] == "/" and not order_supplied else p["supplied_order"]
-            )
-
-        # sorted by order then by module name
-        page_registry_list = sorted(
-            self.page_registry.values(),
-            key=lambda i: (str(i.get("order", i["module"])), i["module"]),
-        )
-
-        self.page_registry = collections.OrderedDict(
-            [(p["module"], p) for p in page_registry_list]
         )
 
     def _import_layouts_from_pages(self):
@@ -2163,6 +2120,8 @@ class Dash:
                 page_filename = page_filename.replace(".py", "").replace("/", ".")
                 page_module = importlib.import_module(f"pages.{page_filename}")
 
+                # Update page_registry assigned with dash.register_page
+                self.page_registry = _pages.PAGE_REGISTRY.copy()
                 if f"pages.{page_filename}" in self.page_registry:
                     self.page_registry[f"pages.{page_filename}"]["layout"] = getattr(
                         page_module, "layout"
