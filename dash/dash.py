@@ -60,6 +60,25 @@ from ._grouping import (
     grouping_len,
 )
 
+# amw
+import warnings
+from textwrap import dedent
+from . import _pages
+from ._pages import (
+    _infer_image,
+    _filename_to_name,
+    _validate_template,
+    _infer_path,
+    _parse_path_variables,
+    _parse_query_string,
+)
+
+
+_ID_CONTENT = "_pages_plugin_content"
+_ID_LOCATION = "_pages_plugin_location"
+_ID_STORE = "_pages_plugin_store"
+_ID_DUMMY = "_pages_plugin_dummy"
+
 
 _flask_compress_version = parse_version(get_distribution("flask-compress").version)
 
@@ -419,10 +438,24 @@ class Dash:
             for plugin in plugins:
                 plugin.plug(self)
 
+        # amw
+        self.page_registry = collections.OrderedDict()
+
+        _pages.PAGE_CONTAINER = html.Div(
+            [
+                dcc.Location(id=_ID_LOCATION),
+                html.Div(id=_ID_CONTENT),
+                dcc.Store(id=_ID_STORE),
+                html.Div(id=_ID_DUMMY),
+            ]
+        )
+
         if self.server is not None:
             self.init_app()
 
         self.logger.setLevel(logging.INFO)
+
+        self.pages()
 
     def init_app(self, app=None, **kwargs):
         """Initialize the parts of Dash that require a flask app."""
@@ -2040,3 +2073,276 @@ class Dash:
                     extra_files.append(path)
 
         self.server.run(host=host, port=port, debug=debug, **flask_run_options)
+
+    # amw
+
+    def register_page(
+        self,
+        module,
+        path=None,
+        path_template=None,
+        name=None,
+        order=None,
+        title=None,
+        description=None,
+        image=None,
+        redirect_from=None,
+        layout=None,
+        **kwargs,
+    ):
+        """ """
+        # COERCE
+        # - Set the order
+        # - Inferred paths
+        page = dict(
+            module=module,
+            supplied_path=path,
+            path_template=None
+            if path_template is None
+            else _validate_template(path_template),
+            path=(path if path is not None else _infer_path(module, path_template)),
+            supplied_name=name,
+            name=(name if name is not None else _filename_to_name(module)),
+        )
+        page.update(
+            supplied_title=title,
+            title=(title if title is not None else page["name"]),
+        )
+        page.update(
+            description=description if description else "",
+            order=order,
+            supplied_order=order,
+            supplied_layout=layout,
+            **kwargs,
+        )
+        page.update(
+            image=(image if image is not None else _infer_image(module)),
+            supplied_image=image,
+        )
+        page.update(redirect_from=redirect_from)
+
+        self.page_registry[module] = page
+
+        if layout is not None:
+            # Override the layout found in the file set during `plug`
+            self.page_registry[module]["layout"] = layout
+
+        # set home page order
+        order_supplied = any(
+            p["supplied_order"] is not None for p in self.page_registry.values()
+        )
+
+        for p in self.page_registry.values():
+            p["order"] = (
+                0 if p["path"] == "/" and not order_supplied else p["supplied_order"]
+            )
+
+        # sorted by order then by module name
+        page_registry_list = sorted(
+            self.page_registry.values(),
+            key=lambda i: (str(i.get("order", i["module"])), i["module"]),
+        )
+
+        self.page_registry = collections.OrderedDict(
+            [(p["module"], p) for p in page_registry_list]
+        )
+
+    def _import_layouts_from_pages(self):
+        for (root, dirs, files) in os.walk("pages"):
+            for file in files:
+
+                if file.endswith(".py") and not file.startswith("_"):
+                    with open(os.path.join(root, file)) as f:
+                        content = f.read()
+                        if "register_page" not in content:
+                            continue
+                if file.startswith("_") or not file.endswith(".py"):
+                    continue
+                page_filename = os.path.join(root, file).replace("\\", "/")
+                _, _, page_filename = page_filename.partition("pages/")
+                page_filename = page_filename.replace(".py", "").replace("/", ".")
+                page_module = importlib.import_module(f"pages.{page_filename}")
+
+                if f"pages.{page_filename}" in self.page_registry:
+                    self.page_registry[f"pages.{page_filename}"]["layout"] = getattr(
+                        page_module, "layout"
+                    )
+
+    def _path_to_page(self, path_id):
+        path_variables = None
+        for page in self.page_registry.values():
+            if page["path_template"]:
+                template_id = page["path_template"].strip("/")
+                path_variables = _parse_path_variables(path_id, template_id)
+                if path_variables:
+                    return page, path_variables
+            if path_id == page["path"].strip("/"):
+                return page, path_variables
+        return {}, None
+
+    def pages(self):
+        if os.path.exists("pages"):
+            self._import_layouts_from_pages()
+        else:
+            warnings.warn("A folder called `pages` does not exist.", stacklevel=2)
+
+        @self.server.before_first_request
+        def router():
+            @self.callback(
+                Output(_ID_CONTENT, "children"),
+                Output(_ID_STORE, "data"),
+                Input(_ID_LOCATION, "pathname"),
+                Input(_ID_LOCATION, "search"),
+                prevent_initial_call=True,
+            )
+            def update(pathname, search):
+                # updates layout on page navigation
+                # updates the stored page title which will trigger the clientside callback to update the app title
+
+                query_parameters = _parse_query_string(search)
+                page, path_variables = self._path_to_page(
+                    self.strip_relative_path(pathname)
+                )
+
+                # get layout
+                if page == {}:
+                    if "pages.not_found_404" in self.page_registry:
+                        layout = self.page_registry["pages.not_found_404"]["layout"]
+                        title = self.page_registry["pages.not_found_404"]["title"]
+                    else:
+                        layout = html.H1("404")
+                        title = self.title
+                else:
+                    layout = page["layout"]
+                    title = page["title"]
+
+                if callable(layout):
+                    layout = (
+                        layout(**path_variables, **query_parameters)
+                        if path_variables
+                        else layout(**query_parameters)
+                    )
+                if callable(title):
+                    title = title(**path_variables) if path_variables else title()
+
+                return layout, {"title": title}
+
+            # check for duplicate pathnames
+            path_to_module = {}
+            for page in self.page_registry.values():
+                if page["path"] not in path_to_module:
+                    path_to_module[page["path"]] = [page["module"]]
+                else:
+                    path_to_module[page["path"]].append(page["module"])
+
+            for modules in path_to_module.values():
+                if len(modules) > 1:
+                    raise Exception(f"modules {modules} have duplicate paths")
+
+            # Set validation_layout
+            self.validation_layout = html.Div(
+                [
+                    page["layout"]() if callable(page["layout"]) else page["layout"]
+                    for page in self.page_registry.values()
+                ]
+                + [self.layout() if callable(self.layout) else self.layout]
+            )
+
+            # Update the page title on page navigation
+            self.clientside_callback(
+                f"""
+                function(data) {{
+                    document.title = data.title || 'Dash'
+                }}
+                """,
+                Output(_ID_DUMMY, "children"),
+                Input(_ID_STORE, "data"),
+            )
+
+            # Set index HTML for the meta description and page title on page load
+            def interpolate_index(**kwargs):
+                # The flask.request.path doesn't include the pathname prefix
+                # when inside DE Workspaces or deployed environments,
+                # so we don't need to call `app.strip_relative_path` on it.
+                start_page, path_variables = self._path_to_page(
+                    flask.request.path.strip("/")
+                )
+                image = start_page.get("image", "")
+                if image:
+                    image = self.get_asset_url(image)
+
+                title = start_page.get("title", self.title)
+                if callable(title):
+                    title = title(**path_variables) if path_variables else title()
+
+                description = start_page.get("description", "")
+                if callable(description):
+                    description = (
+                        description(**path_variables)
+                        if path_variables
+                        else description()
+                    )
+
+                return dedent(
+                    """
+                    <!DOCTYPE html>
+                    <html>
+                        <head>
+                            <meta name="viewport" content="width=device-width, initial-scale=1">
+                            <title>{title}</title>
+                            <meta name="description" content="{description}" />
+                            <!-- Twitter Card data -->
+                            <meta property="twitter:card" content="{description}">
+                            <meta property="twitter:url" content="https://metatags.io/">
+                            <meta property="twitter:title" content="{title}">
+                            <meta property="twitter:description" content="{description}">
+                            <meta property="twitter:image" content="{image}">
+                            <!-- Open Graph data -->
+                            <meta property="og:title" content="{title}" />
+                            <meta property="og:type" content="website" />
+                            <meta property="og:description" content="{description}" />       
+                            <meta property="og:image" content="{image}">
+                            {metas}
+                            {favicon}
+                            {css}
+                        </head>
+                        <body>
+                            {app_entry}
+                            <footer>
+                                {config}
+                                {scripts}
+                                {renderer}
+                            </footer>
+                        </body>
+                    </html>
+                    """
+                ).format(
+                    metas=kwargs["metas"],
+                    description=description,
+                    title=title,
+                    image=image,
+                    favicon=kwargs["favicon"],
+                    css=kwargs["css"],
+                    app_entry=kwargs["app_entry"],
+                    config=kwargs["config"],
+                    scripts=kwargs["scripts"],
+                    renderer=kwargs["renderer"],
+                )
+
+            self.interpolate_index = interpolate_index
+
+            def create_redirect_function(redirect_to):
+                def redirect():
+                    return flask.redirect(redirect_to, code=301)
+
+                return redirect
+
+            # Set redirects
+            for module in self.page_registry:
+                page = self.page_registry[module]
+                if page["redirect_from"] and len(page["redirect_from"]):
+                    for redirect in page["redirect_from"]:
+                        fullname = self.get_relative_path(redirect)
+                        self.server.add_url_rule(
+                            fullname, fullname, create_redirect_function(page["path"])
+                        )
