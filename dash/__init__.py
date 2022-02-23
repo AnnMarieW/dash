@@ -27,4 +27,19 @@ from ._get_paths import (  # noqa: F401,E402
     strip_relative_path,
 )
 
-from ._pages import get_page_container, register_page, get_page_registry
+from ._pages import register_page, get_page_registry  # noqa: F401,E402
+
+
+ID_CONTENT = "_pages_content"
+ID_LOCATION = "_pages_location"
+ID_STORE = "_pages_store"
+ID_DUMMY = "_pages_dummy"
+
+page_container = html.Div(
+    children=[
+        dcc.Location(id=ID_LOCATION),
+        html.Div(id=ID_CONTENT),
+        dcc.Store(id=ID_STORE),
+        html.Div(id=ID_DUMMY),
+    ]
+)

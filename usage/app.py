@@ -22,7 +22,7 @@ app.layout = html.Div(
                 if page["module"] != "pages.not_found_404"
             ]
         ),
-        dash.get_page_container(),
+        dash.page_container,
     ]
 )
 

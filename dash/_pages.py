@@ -1,28 +1,20 @@
 import os
 from os import listdir
-import collections
 from os.path import isfile, join
+import collections
 from urllib.parse import parse_qs
-from keyword import iskeyword
-import warnings
+from . import _validate
 
 
-def warning_message(message, category, filename, lineno, line=None):
-    return f"{category.__name__}:\n {message} \n"
-
-
-warnings.formatwarning = warning_message
-
-PAGE_CONTAINER = ""
 PAGE_REGISTRY = collections.OrderedDict()
 
 
-def get_page_container():
-    return PAGE_CONTAINER
-
-
 def get_page_registry():
-    return PAGE_REGISTRY
+    page_registry_list = sorted(
+        PAGE_REGISTRY.values(),
+        key=lambda i: (str(i.get("order", i["module"])), i["module"]),
+    )
+    return collections.OrderedDict([(p["module"], p) for p in page_registry_list])
 
 
 def _infer_image(module):
@@ -35,7 +27,8 @@ def _infer_image(module):
     valid_extensions = ["apng", "avif", "gif", "jpeg", "png", "webp"]
     page_id = module.split(".")[-1]
     files_in_assets = []
-    # todo need to check for app.get_assets_url instead?
+    # todo need to check for other assets folders?
+
     if os.path.exists("assets"):
         files_in_assets = [f for f in listdir("assets") if isfile(join("assets", f))]
     app_file = None
@@ -63,23 +56,6 @@ def _infer_image(module):
 
 def _filename_to_name(filename):
     return filename.split(".")[-1].replace("_", " ").capitalize()
-
-
-def _validate_template(template):
-    template_segments = template.split("/")
-    for s in template_segments:
-        if "<" in s or ">" in s:
-            if not (s.startswith("<") and s.endswith(">")):
-                raise Exception(
-                    f'Invalid `path_template`: "{template}"  Path segments with variables must be formatted as <variable_name>'
-                )
-            variable_name = s[1:-1]
-            if not variable_name.isidentifier() or iskeyword(variable_name):
-                warnings.warn(
-                    f'`{variable_name}` is not a valid Python variable name in `path_template`: "{template}".',
-                    stacklevel=2,
-                )
-    return template
 
 
 def _infer_path(filename, template):
@@ -144,7 +120,109 @@ def register_page(
     layout=None,
     **kwargs,
 ):
-    """ """
+    """
+    Assigns the variables to `dash.page_registry` as an `OrderedDict`
+    (ordered by `order`).
+
+    `dash.page_registry` is used by `pages_plugin` to set up the layouts as
+    a multi-page Dash app. This includes the URL routing callbacks
+    (using `dcc.Location`) and the HTML templates to include title,
+    meta description, and the meta description image.
+
+    `dash.page_registry` can also be used by Dash developers to create the
+    page navigation links or by template authors.
+
+    - `module`:
+       The module path where this page's `layout` is defined. Often `__name__`.
+
+    - `path`:
+       URL Path, e.g. `/` or `/home-page`.
+       If not supplied, will be inferred from the `path_template` or `module`,
+       e.g. based on path_template: `/asset/<asset_id` to `/asset/none`
+       e.g. based on module: `pages.weekly_analytics` to `/weekly-analytics`
+
+    - `path_template`:
+       Add variables to a URL by marking sections with <variable_name>. The layout function
+       then receives the <variable_name> as a keyword argument.
+       e.g. path_template= "/asset/<asset_id>"
+            then if pathname in browser is "/assets/a100" then layout will receive **{"asset_id":"a100"}
+
+    - `name`:
+       The name of the link.
+       If not supplied, will be inferred from `module`,
+       e.g. `pages.weekly_analytics` to `Weekly analytics`
+
+    - `order`:
+       The order of the pages in `page_registry`.
+       If not supplied, then the filename is used and the page with path `/` has
+       order `0`
+
+    - `title`:
+       (string or function) The name of the page <title>. That is, what appears in the browser title.
+       If not supplied, will use the supplied `name` or will be inferred by module,
+       e.g. `pages.weekly_analytics` to `Weekly analytics`
+
+    - `description`:
+       (string or function) The <meta type="description"></meta>.
+       If not supplied, then nothing is supplied.
+
+    - `image`:
+       The meta description image used by social media platforms.
+       If not supplied, then it looks for the following images in `assets/`:
+        - A page specific image: `assets/<title>.<extension>` is used, e.g. `assets/weekly_analytics.png`
+        - A generic app image at `assets/app.<extension>`
+        - A logo at `assets/logo.<extension>`
+        When inferring the image file, it will look for the following extensions: APNG, AVIF, GIF, JPEG, PNG, SVG, WebP.
+
+    - `redirect_from`:
+       A list of paths that should redirect to this page.
+       For example: `redirect_from=['/v2', '/v3']`
+
+    - `layout`:
+       The layout function or component for this page.
+       If not supplied, then looks for `layout` from within the supplied `module`.
+
+    - `**kwargs`:
+       Arbitrary keyword arguments that can be stored
+
+    ***
+
+    `page_registry` stores the original property that was passed in under
+    `supplied_<property>` and the coerced property under `<property>`.
+    For example, if this was called:
+    ```
+    register_page(
+        'pages.historical_outlook',
+        name='Our historical view',
+        custom_key='custom value'
+    )
+    ```
+    Then this will appear in `page_registry`:
+    ```
+    OrderedDict([
+        (
+            'pages.historical_outlook',
+            dict(
+                module='pages.historical_outlook',
+
+                supplied_path=None,
+                path='/historical-outlook',
+
+                supplied_name='Our historical view',
+                name='Our historical view',
+
+                supplied_title=None,
+                title='Our historical view'
+
+                supplied_layout=None,
+                layout=<function pages.historical_outlook.layout>,
+
+                custom_key='custom value'
+            )
+        ),
+    ])
+    ```
+    """
     return app_register_page(
         PAGE_REGISTRY,
         module,
@@ -183,7 +261,7 @@ def app_register_page(
         supplied_path=path,
         path_template=None
         if path_template is None
-        else _validate_template(path_template),
+        else _validate.validate_template(path_template),
         path=(path if path is not None else _infer_path(module, path_template)),
         supplied_name=name,
         name=(name if name is not None else _filename_to_name(module)),
@@ -220,16 +298,3 @@ def app_register_page(
         p["order"] = (
             0 if p["path"] == "/" and not order_supplied else p["supplied_order"]
         )
-
-    # sorted by order then by module name
-    page_registry_list = sorted(
-        page_registry.values(),
-        key=lambda i: (str(i.get("order", i["module"])), i["module"]),
-    )
-
-    page_registry = collections.OrderedDict(
-        [(p["module"], p) for p in page_registry_list]
-    )
-
-    global PAGE_REGISTRY
-    PAGE_REGISTRY = page_registry
