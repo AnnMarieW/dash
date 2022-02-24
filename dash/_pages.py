@@ -4,17 +4,11 @@ from os.path import isfile, join
 import collections
 from urllib.parse import parse_qs
 from . import _validate
+from ._utils import AttributeDict
 
 
+CONFIG = AttributeDict()
 PAGE_REGISTRY = collections.OrderedDict()
-
-
-def get_page_registry():
-    page_registry_list = sorted(
-        PAGE_REGISTRY.values(),
-        key=lambda i: (str(i.get("order", i["module"])), i["module"]),
-    )
-    return collections.OrderedDict([(p["module"], p) for p in page_registry_list])
 
 
 def _infer_image(module):
@@ -24,13 +18,15 @@ def _infer_image(module):
     - A generic app image at `assets/app.<extension>`
     - A logo at `assets/logo.<extension>`
     """
+    assets_folder = CONFIG.assets_folder
     valid_extensions = ["apng", "avif", "gif", "jpeg", "png", "webp"]
     page_id = module.split(".")[-1]
     files_in_assets = []
-    # todo need to check for other assets folders?
 
-    if os.path.exists("assets"):
-        files_in_assets = [f for f in listdir("assets") if isfile(join("assets", f))]
+    if os.path.exists(assets_folder):
+        files_in_assets = [
+            f for f in listdir(assets_folder) if isfile(join(assets_folder, f))
+        ]
     app_file = None
     logo_file = None
     for fn in files_in_assets:
@@ -223,36 +219,6 @@ def register_page(
     ])
     ```
     """
-    return app_register_page(
-        PAGE_REGISTRY,
-        module,
-        path,
-        path_template,
-        name,
-        order,
-        title,
-        description,
-        image,
-        redirect_from,
-        layout,
-        **kwargs,
-    )
-
-
-def app_register_page(
-    page_registry,
-    module,
-    path=None,
-    path_template=None,
-    name=None,
-    order=None,
-    title=None,
-    description=None,
-    image=None,
-    redirect_from=None,
-    layout=None,
-    **kwargs,
-):
     # COERCE
     # - Set the order
     # - Inferred paths
@@ -283,18 +249,25 @@ def app_register_page(
     )
     page.update(redirect_from=redirect_from)
 
-    page_registry[module] = page
+    PAGE_REGISTRY[module] = page
 
     if layout is not None:
         # Override the layout found in the file set during `plug`
-        page_registry[module]["layout"] = layout
+        PAGE_REGISTRY[module]["layout"] = layout
 
     # set home page order
     order_supplied = any(
-        p["supplied_order"] is not None for p in page_registry.values()
+        p["supplied_order"] is not None for p in PAGE_REGISTRY.values()
     )
 
-    for p in page_registry.values():
+    for p in PAGE_REGISTRY.values():
         p["order"] = (
             0 if p["path"] == "/" and not order_supplied else p["supplied_order"]
         )
+
+    # Sort by order and module, then by module
+    for page in sorted(
+        PAGE_REGISTRY.values(),
+        key=lambda i: (str(i.get("order", i["module"])), i["module"]),
+    ):
+        PAGE_REGISTRY.move_to_end(page["module"])

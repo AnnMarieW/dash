@@ -10,7 +10,7 @@ from . import exceptions
 from ._utils import patch_collections_abc, stringify_id, to_json
 
 
-def warning_message(message, category):
+def warning_message(message, category, _, __, ___):
     return f"{category.__name__}:\n {message} \n"
 
 

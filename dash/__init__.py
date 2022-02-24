@@ -2,7 +2,7 @@
 # __plotly_dash is for the "make sure you don't have a dash.py" check
 # must come before any other imports.
 __plotly_dash = True
-from .dash import Dash, no_update  # noqa: F401,E402
+# from .dash import Dash, no_update  # noqa: F401,E402
 from .dependencies import (  # noqa: F401,E402
     Input,  # noqa: F401,E402
     Output,  # noqa: F401,E402
@@ -27,19 +27,13 @@ from ._get_paths import (  # noqa: F401,E402
     strip_relative_path,
 )
 
-from ._pages import register_page, get_page_registry  # noqa: F401,E402
-
-
-ID_CONTENT = "_pages_content"
-ID_LOCATION = "_pages_location"
-ID_STORE = "_pages_store"
-ID_DUMMY = "_pages_dummy"
-
-page_container = html.Div(
-    children=[
-        dcc.Location(id=ID_LOCATION),
-        html.Div(id=ID_CONTENT),
-        dcc.Store(id=ID_STORE),
-        html.Div(id=ID_DUMMY),
-    ]
+from ._pages import register_page, PAGE_REGISTRY as page_registry  # noqa: F401,E402
+from .dash import (  # noqa: F401,E402
+    Dash,
+    no_update,
+    page_container,
+    _ID_DUMMY,
+    _ID_LOCATION,
+    _ID_STORE,
+    _ID_CONTENT,
 )
